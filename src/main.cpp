@@ -214,37 +214,6 @@ void resetDisplay()
   updateDisplay();
 }
 
-// ===== WebSocket 이벤트 =====
-void onWebSocketEvent(WStype_t type, uint8_t *payload, size_t length)
-{
-  switch (type)
-  {
-  case WStype_CONNECTED:
-    Serial.println("✅ WebSocket 연결됨!");
-    isConnected = true;
-    resetDisplay();
-    playMP3(10);
-    break;
-
-  case WStype_DISCONNECTED:
-    Serial.println("❌ WebSocket 연결 끊김!");
-    isConnected = false;
-    break;
-
-  case WStype_TEXT:
-    Serial.printf("📩 서버 메시지: %s\n", payload);
-    break;
-
-  case WStype_ERROR:
-    Serial.println("⚠️ WebSocket 오류!");
-    isConnected = false;
-    break;
-
-  default:
-    break;
-  }
-}
-
 // ===== I2S 초기화 =====
 void setupMic()
 {
@@ -337,7 +306,7 @@ bool canPlayAudio()
   return true;
 }
 
-void playMP3(uint8_t profileIndex)
+void playMP3(int profileIndex)
 {
   if (!canPlayAudio()) return;
 
@@ -369,6 +338,37 @@ void playMP3(uint8_t profileIndex)
   {
     Serial.println("✅ MP3 재생 시작됨");
     isPlaying = true;
+  }
+}
+
+// ===== WebSocket 이벤트 =====
+void onWebSocketEvent(WStype_t type, uint8_t *payload, size_t length)
+{
+  switch (type)
+  {
+  case WStype_CONNECTED:
+    Serial.println("✅ WebSocket 연결됨!");
+    isConnected = true;
+    resetDisplay();
+    playMP3(10);
+    break;
+
+  case WStype_DISCONNECTED:
+    Serial.println("❌ WebSocket 연결 끊김!");
+    isConnected = false;
+    break;
+
+  case WStype_TEXT:
+    Serial.printf("📩 서버 메시지: %s\n", payload);
+    break;
+
+  case WStype_ERROR:
+    Serial.println("⚠️ WebSocket 오류!");
+    isConnected = false;
+    break;
+
+  default:
+    break;
   }
 }
 
@@ -418,7 +418,6 @@ void handleRecordButton()
 {
   bool recordButtonState = digitalRead(BUTTON_RECORD_PIN) == LOW;
 
-  // 버튼 눌림 (상승 엣지)
   if (recordButtonState && !lastRecordButtonState)
   {
     if (!isRecording && !isPlaying)
@@ -426,7 +425,7 @@ void handleRecordButton()
       startRecording();
     }
   }
-  // 버튼 떼어짐 (하강 엣지)
+
   else if (!recordButtonState && lastRecordButtonState)
   {
     if (isRecording)
@@ -690,5 +689,5 @@ void loop()
   handleMP3Playback();
   handleDisplayBlink();
   
-  delay(10);
+  delay(5);
 }
