@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-GPL3.0-blue.svg)](LICENSE)
 
 Arduino-Recorder는 Arduino Nano ESP32를 기반으로 한 음성 녹음 및 재생 시스템입니다.  
-WebSocket을 통해 서버와 실시간으로 통신하며, 최대 5개의 프로필에 음성을 녹음하고 재생할 수 있습니다.
+WebSocket을 통해 [서버](https://github.com/tharu8813/Arduino-Recorder-Server)와 실시간으로 통신하며, 최대 5개의 프로필에 음성을 녹음하고 재생할 수 있습니다.
 
 ## 배선도
 
