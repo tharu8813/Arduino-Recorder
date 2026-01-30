@@ -82,6 +82,42 @@ AudioFileSourceHTTPStream *fileHttp = nullptr;
 AudioFileSourceBuffer *fileBuf = nullptr;
 AudioOutputI2S *out = nullptr;
 
+// ===== URL 정규화 함수 =====
+String normalizeServerURL(String url)
+{
+  url.trim();
+  
+  // http:// 또는 https:// 제거
+  if (url.startsWith("http://"))
+  {
+    url = url.substring(7);
+  }
+  else if (url.startsWith("https://"))
+  {
+    url = url.substring(8);
+  }
+  
+  // 마지막 슬래시 제거
+  while (url.endsWith("/"))
+  {
+    url = url.substring(0, url.length() - 1);
+  }
+  
+  return url;
+}
+
+String buildHTTPURL(String path)
+{
+  String normalized = normalizeServerURL(serverURL);
+  return "http://" + normalized + path;
+}
+
+String buildHTTPSURL(String path)
+{
+  String normalized = normalizeServerURL(serverURL);
+  return "https://" + normalized + path;
+}
+
 // ===== 설정 관리 =====
 void loadSettings()
 {
@@ -100,17 +136,22 @@ void loadSettings()
     Serial.println("✅ 설정 로드 완료");
     Serial.println("SSID   : " + wifiSSID);
     Serial.println("SERVER : " + serverURL);
+    Serial.println("정규화 : " + normalizeServerURL(serverURL));
   }
 }
 
 void saveSettings()
 {
+  // 저장 전 URL 정규화
+  serverURL = normalizeServerURL(serverURL);
+  
   prefs.begin("config", false);
   prefs.putString("ssid", wifiSSID);
   prefs.putString("pass", wifiPASS);
   prefs.putString("server", serverURL);
   prefs.end();
   Serial.println("💾 설정 저장 완료");
+  Serial.println("정규화된 서버: " + serverURL);
 }
 
 // ===== Wi-Fi 연결 =====
@@ -188,22 +229,22 @@ void handleDisplayBlink()
 {
   bool shouldBlink = !isConnected || isPlaying || isRecording;
   
-  if (shouldBlink)
-  {
+  if (shouldBlink) {
     unsigned long now = millis();
-    if (now - lastBlinkTime >= BLINK_INTERVAL)
-    {
+    if (now - lastBlinkTime >= BLINK_INTERVAL) {
       lastBlinkTime = now;
       displayOn = !displayOn;
       setDisplayBrightness(displayOn);
       if (displayOn) updateDisplay();
     }
   }
-  else if (!displayOn)
-  {
-    displayOn = true;
-    setDisplayBrightness(true);
-    updateDisplay();
+  else {
+    // 깜빡임 중지 시 항상 켜진 상태로 복구
+    if (!displayOn) {
+      displayOn = true;
+      setDisplayBrightness(true);
+    }
+    updateDisplay();  // 매번 업데이트
   }
 }
 
@@ -243,6 +284,7 @@ void setupMic()
 
 void setupSpeaker()
 {
+  if (out) delete out;
   out = new AudioOutputI2S(1);
   out->SetPinout(I2S_SPK_BCLK, I2S_SPK_LRCL, I2S_SPK_DIN);
   out->SetGain(SPEAKER_GAIN);
@@ -286,7 +328,8 @@ void stopSpeaker()
 void stopPlaybackAndResetMic()
 {
   stopSpeaker();
-  delay(100);
+  delay(200);
+  i2s_driver_uninstall(I2S_NUM_0);
   setupMic();
 }
 
@@ -306,11 +349,41 @@ bool canPlayAudio()
   return true;
 }
 
+bool checkFileExists(String url)
+{
+  HTTPClient http;
+  http.begin(url);
+  int httpCode = http.GET();
+  http.end();
+  
+  if (httpCode == 404)
+  {
+    Serial.println("❌ 404 오류: 파일을 찾을 수 없습니다");
+    return false;
+  }
+  else if (httpCode < 0)
+  {
+    Serial.println("❌ HTTP 요청 실패");
+    return false;
+  }
+  
+  return (httpCode == 200);
+}
+
 void playMP3(int profileIndex)
 {
   if (!canPlayAudio()) return;
 
-  String url = "http://" + String(serverURL) + "/recording_" + String(profileIndex) + ".mp3";
+  // URL 정규화를 사용하여 올바른 URL 생성
+  String url = buildHTTPURL("/recording_" + String(profileIndex) + ".mp3");
+  
+  // 파일 존재 여부 먼저 확인
+  if (!checkFileExists(url))
+  {
+    Serial.println("💡 프로필 " + String(profileIndex + 1) + "의 녹음 파일이 없습니다");
+    return;
+  }
+
   Serial.println("▶ 재생 중: " + url);
 
   stopSpeaker();
@@ -350,7 +423,6 @@ void onWebSocketEvent(WStype_t type, uint8_t *payload, size_t length)
     Serial.println("✅ WebSocket 연결됨!");
     isConnected = true;
     resetDisplay();
-    playMP3(10);
     break;
 
   case WStype_DISCONNECTED:
@@ -381,7 +453,10 @@ void checkConnection()
   if (!webSocket.isConnected() && (now - lastConnectionAttempt > CONNECTION_CHECK_INTERVAL))
   {
     Serial.println("🔄 WebSocket 연결 시도 중...");
-    webSocket.beginSSL(serverURL, 443, "/ws");
+    
+    // URL 정규화를 사용하여 WebSocket 연결
+    String normalized = normalizeServerURL(serverURL);
+    webSocket.beginSSL(normalized.c_str(), 443, "/ws");
     webSocket.onEvent(onWebSocketEvent);
     webSocket.setReconnectInterval(5000);
     lastConnectionAttempt = now;
@@ -456,16 +531,17 @@ void sendAudioData()
   size_t bytesRead;
   i2s_read(I2S_NUM_0, micBuffer, sizeof(micBuffer), &bytesRead, 100);
 
-  if (bytesRead > 0)
-  {
+  if (bytesRead > 0) {
     int samples = bytesRead / sizeof(int32_t);
-    for (int i = 0; i < samples; i++)
-    {
+    for (int i = 0; i < samples; i++) {
       pcm16[i] = applySampleGain(micBuffer[i]);
     }
 
     String encoded = base64::encode((uint8_t *)pcm16, samples * sizeof(int16_t));
-    webSocket.sendTXT(encoded);
+    
+    // 신규 프로토콜 사용
+    String message = "DATA:" + String(currentProfile) + ":" + encoded;
+    webSocket.sendTXT(message);
   }
 }
 
@@ -583,6 +659,7 @@ void printStatus()
   Serial.println("===== 상태 =====");
   Serial.println("SSID   : " + wifiSSID);
   Serial.println("SERVER : " + serverURL);
+  Serial.println("정규화 : " + normalizeServerURL(serverURL));
   Serial.println("WiFi   : " + String(wifiConnected ? "연결됨" : "연결 안됨"));
   Serial.println("================");
 }
@@ -606,8 +683,10 @@ void handleSerialCommand()
   }
   else if (cmd.startsWith("SERVER "))
   {
-    serverURL = cmd.substring(7);
-    Serial.println("✅ 서버 설정: " + serverURL);
+    String rawURL = cmd.substring(7);
+    serverURL = normalizeServerURL(rawURL);
+    Serial.println("✅ 서버 설정: " + rawURL);
+    Serial.println("   정규화됨: " + serverURL);
   }
   else if (cmd == "SAVE")
   {
@@ -677,8 +756,26 @@ void loop()
 {
   handleSerialCommand();
   
-  if (wifiConnected)
-  {
+  // WiFi 연결 상태 체크
+  if (wifiConnected && WiFi.status() != WL_CONNECTED) {
+    Serial.println("⚠️ WiFi 연결 끊김 감지");
+    wifiConnected = false;
+    isConnected = false;
+    if (isRecording) {
+      stopRecording();
+    }
+    if (isPlaying) {
+      stopPlaybackAndResetMic();
+    }
+  }
+  
+  // WiFi 자동 재연결 시도
+  if (!wifiConnected && WiFi.status() == WL_CONNECTED) {
+    Serial.println("✅ WiFi 자동 재연결됨");
+    wifiConnected = true;
+  }
+  
+  if (wifiConnected) {
     webSocket.loop();
     checkConnection();
   }
